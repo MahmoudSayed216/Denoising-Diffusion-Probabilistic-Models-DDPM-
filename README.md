@@ -1,0 +1,2 @@
+# Denoising-Diffusion-Probabilistic-Models-DDPM-
+An implementation of the DDPM paper in PyTorch

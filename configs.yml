@@ -1,9 +1,74 @@
-B1: 0.001
-MUE: 0
-SIGMA: 1
+## ============================================================
+## DIFFUSION PARAMETERS (beta schedule, timesteps, etc.)
+## ============================================================
+DIFFUSION:
+  TIMESTEPS: 500              # T -- number of forward/reverse diffusion steps (not gradient steps)
+  BETA_START: 0.0001
+  BETA_END: 0.02
+  BETA_SCHEDULE: "linear"      # currently only "linear" is implemented
 
+## ============================================================
+## MODEL / ARCHITECTURE PARAMETERS
+## ============================================================
+MODEL:
+  CLASS_EMBEDDING_DIM: 256
+  TIMESTAMP_EMBEDDING_DIM: 256   # must equal CLASS_EMBEDDING_DIM -- they are summed together
+  NUM_CLASSES: 10
+  THETA: 10000
+  IMAGE_SIDE_LENGTH: 32
+  CHANNELS_PER_LEVEL: [64, 128, 256, 512]   # [c1, c2, c3, c4] channel widths per resolution
+  NUM_GROUPS: 32
 
-CLASS_EMBEDDING_DIM: 128
-TIMESTAMP_EMBEDDING_DIM: 128
-NUM_EMBEDDINGS: 10
-N = 10000
+## ============================================================
+## DATA
+## ============================================================
+DATA:
+  DATA_DIR: "./data"
+  NUM_WORKERS: 4
+  BATCH_SIZE: 128
+
+## ============================================================
+## TRAINING
+## ============================================================
+TRAINING:
+  EPOCHS: 70
+  LR: 0.0002
+  DISCRIMINATOR_LR: 0.0002
+  OPTIMIZER: "adam"
+  ADAM_BETAS: [0.5, 0.999]
+  GRAD_CLIP_NORM: 1.0
+  DEVICE: "cuda"                 # falls back to cpu automatically if unavailable
+  SEED: 42
+  LOG_EVERY_N_STEPS: 50
+  CHECKPOINT_DIR: "./checkpoints"
+  CHECKPOINT_EVERY_N_EPOCHS: 10
+
+## ============================================================
+## PROGRESSIVE LOSS SCHEDULE
+## Phase 1 [epoch 1 .. PHASE1_END_EPOCH]                -> reconstruction only
+## Phase 2 [PHASE1_END_EPOCH+1 .. PHASE2_END_EPOCH]     -> + perceptual
+## Phase 3 [PHASE2_END_EPOCH+1 .. EPOCHS]               -> + adversarial
+## ============================================================
+LOSS:
+  PHASE1_END_EPOCH: 23
+  PHASE2_END_EPOCH: 46
+  PERCEPTUAL_WEIGHT: 0.1
+  ADVERSARIAL_WEIGHT: 0.05
+  VGG_LAYER_INDICES: [3, 8, 15, 22]   # relu1_2, relu2_2, relu3_3, relu4_3 in torchvision vgg16.features
+
+## ============================================================
+## FIXED-NOISE QUALITATIVE SAMPLING (every epoch)
+## ============================================================
+SAMPLING:
+  SAMPLE_EVERY_N_EPOCHS: 1
+  NUM_FIXED_SAMPLES: 10          # one sample per class, 0..9
+  SAMPLES_DIR: "./samples"
+
+## ============================================================
+## EVALUATION (FID / Inception Score)
+## ============================================================
+EVAL:
+  COMPUTE_FID_IS: true
+  FID_EVERY_N_EPOCHS: 5          # periodic, cheap-ish tracking estimate
+  FID_NUM_SAMPLES: 1000          # sample count used for the periodic estimate
+  FINAL_FID_NUM_SAMPLES: 10000   # sample count used for the final, reported number

@@ -88,11 +88,14 @@ def sample_with_fixed_noise(diffusion, model, fixed_noise, fixed_class_ids, devi
 def train_one_epoch(
     model, diffusion, discriminator, perceptual_loss_fn,
     train_loader, model_optimizer, disc_optimizer,
-    epoch, cfg, device, global_step,
+    epoch, cfg, device,
 ):
     """Runs the per-batch training loop for a single epoch.
 
-    Returns (avg_recon, avg_perceptual, avg_adv, global_step, phase_desc).
+    No per-batch logging -- only returns the averaged losses so the caller
+    can print a single summary line once the epoch finishes.
+
+    Returns (avg_recon, avg_perceptual, avg_adv, phase_desc).
     """
     perceptual_weight, adversarial_weight = get_loss_weights(epoch, cfg["LOSS"])
     phase_desc = "recon"
@@ -101,12 +104,13 @@ def train_one_epoch(
     if adversarial_weight > 0:
         phase_desc += "+adversarial"
 
-    num_epochs = cfg["TRAINING"]["EPOCHS"]
     grad_clip_norm = cfg["TRAINING"]["GRAD_CLIP_NORM"]
 
-    running_recon, running_perceptual, running_adv = 0.0, 0.0, 0.0
+    running_recon = 0.0
+    running_perceptual = 0.0
+    running_adv = 0.0
 
-    for step, (x0, class_ids) in enumerate(train_loader):
+    for x0, class_ids in train_loader:
         x0 = x0.to(device)
         class_ids = class_ids.to(device)
         B = x0.shape[0]
@@ -153,21 +157,12 @@ def train_one_epoch(
         running_perceptual += perceptual_loss_value.item()
         running_adv += adv_gen_loss_value.item()
 
-        if global_step % cfg["TRAINING"]["LOG_EVERY_N_STEPS"] == 0:
-            print(
-                f"[epoch {epoch}/{num_epochs} | step {step}/{len(train_loader)} | phase={phase_desc}] "
-                f"recon={recon_loss.item():.4f} "
-                f"perceptual={perceptual_loss_value.item():.4f} "
-                f"adv={adv_gen_loss_value.item():.4f}"
-            )
-        global_step += 1
-
     n_batches = len(train_loader)
     avg_recon = running_recon / n_batches
     avg_perceptual = running_perceptual / n_batches
     avg_adv = running_adv / n_batches
 
-    return avg_recon, avg_perceptual, avg_adv, global_step, phase_desc
+    return avg_recon, avg_perceptual, avg_adv, phase_desc
 
 
 def train(cfg):
@@ -239,16 +234,15 @@ def train(cfg):
 
     num_epochs = cfg["TRAINING"]["EPOCHS"]
 
-    global_step = 0
     for epoch in range(1, num_epochs + 1):
-        avg_recon, avg_perceptual, avg_adv, global_step, phase_desc = train_one_epoch(
+        avg_recon, avg_perceptual, avg_adv, phase_desc = train_one_epoch(
             model, diffusion, discriminator, perceptual_loss_fn,
             train_loader, model_optimizer, disc_optimizer,
-            epoch, cfg, device, global_step,
+            epoch, cfg, device,
         )
 
         print(
-            f"== Epoch {epoch} done | phase={phase_desc} | "
+            f"== Epoch {epoch}/{num_epochs} done | phase={phase_desc} | "
             f"avg_recon={avg_recon:.4f} "
             f"avg_perceptual={avg_perceptual:.4f} "
             f"avg_adv={avg_adv:.4f} =="

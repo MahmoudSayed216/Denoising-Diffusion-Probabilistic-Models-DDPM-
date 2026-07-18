@@ -85,9 +85,92 @@ def sample_with_fixed_noise(diffusion, model, fixed_noise, fixed_class_ids, devi
     return x_t.clamp(-1.0, 1.0)
 
 
-def main():
-    cfg = load_config("configs.yml")
+def train_one_epoch(
+    model, diffusion, discriminator, perceptual_loss_fn,
+    train_loader, model_optimizer, disc_optimizer,
+    epoch, cfg, device, global_step,
+):
+    """Runs the per-batch training loop for a single epoch.
 
+    Returns (avg_recon, avg_perceptual, avg_adv, global_step, phase_desc).
+    """
+    perceptual_weight, adversarial_weight = get_loss_weights(epoch, cfg["LOSS"])
+    phase_desc = "recon"
+    if perceptual_weight > 0:
+        phase_desc += "+perceptual"
+    if adversarial_weight > 0:
+        phase_desc += "+adversarial"
+
+    num_epochs = cfg["TRAINING"]["EPOCHS"]
+    grad_clip_norm = cfg["TRAINING"]["GRAD_CLIP_NORM"]
+
+    running_recon, running_perceptual, running_adv = 0.0, 0.0, 0.0
+
+    for step, (x0, class_ids) in enumerate(train_loader):
+        x0 = x0.to(device)
+        class_ids = class_ids.to(device)
+        B = x0.shape[0]
+
+        t = torch.randint(0, diffusion.timesteps, (B,), device=device)
+        noise = torch.randn_like(x0)
+        x_t = diffusion.q_sample(x0, t, noise)
+
+        predicted_noise = model(x_t, class_ids, t.float())
+
+        # ---- Reconstruction loss (always active) ----
+        recon_loss = nn.functional.mse_loss(predicted_noise, noise)
+        total_loss = recon_loss
+        perceptual_loss_value = torch.tensor(0.0, device=device)
+        adv_gen_loss_value = torch.tensor(0.0, device=device)
+
+        need_x0_hat = perceptual_weight > 0 or adversarial_weight > 0
+        if need_x0_hat:
+            x0_hat = diffusion.predict_x0_from_noise(x_t, t, predicted_noise)
+
+        # ---- Perceptual loss (phase 2+) ----
+        if perceptual_weight > 0:
+            perceptual_loss_value = perceptual_loss_fn(x0_hat, x0)
+            total_loss = total_loss + perceptual_weight * perceptual_loss_value
+
+        # ---- Adversarial loss (phase 3+) ----
+        if adversarial_weight > 0:
+            # 1) Discriminator update (uses a detached fake so gradients don't flow into the model)
+            disc_optimizer.zero_grad()
+            d_loss = discriminator_loss(discriminator, x0, x0_hat.detach())
+            d_loss.backward()
+            disc_optimizer.step()
+
+            # 2) Generator (model) adversarial term -- fresh forward through D, not detached
+            adv_gen_loss_value = generator_adversarial_loss(discriminator, x0_hat)
+            total_loss = total_loss + adversarial_weight * adv_gen_loss_value
+
+        model_optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+        model_optimizer.step()
+
+        running_recon += recon_loss.item()
+        running_perceptual += perceptual_loss_value.item()
+        running_adv += adv_gen_loss_value.item()
+
+        if global_step % cfg["TRAINING"]["LOG_EVERY_N_STEPS"] == 0:
+            print(
+                f"[epoch {epoch}/{num_epochs} | step {step}/{len(train_loader)} | phase={phase_desc}] "
+                f"recon={recon_loss.item():.4f} "
+                f"perceptual={perceptual_loss_value.item():.4f} "
+                f"adv={adv_gen_loss_value.item():.4f}"
+            )
+        global_step += 1
+
+    n_batches = len(train_loader)
+    avg_recon = running_recon / n_batches
+    avg_perceptual = running_perceptual / n_batches
+    avg_adv = running_adv / n_batches
+
+    return avg_recon, avg_perceptual, avg_adv, global_step, phase_desc
+
+
+def train(cfg):
     torch.manual_seed(cfg["TRAINING"]["SEED"])
 
     device = cfg["TRAINING"]["DEVICE"] if torch.cuda.is_available() else "cpu"
@@ -153,81 +236,20 @@ def main():
     fixed_noise, fixed_class_ids = build_fixed_noise_inputs(cfg, device)
 
     num_epochs = cfg["TRAINING"]["EPOCHS"]
-    grad_clip_norm = cfg["TRAINING"]["GRAD_CLIP_NORM"]
 
     global_step = 0
     for epoch in range(1, num_epochs + 1):
-        perceptual_weight, adversarial_weight = get_loss_weights(epoch, cfg["LOSS"])
-        phase_desc = "recon"
-        if perceptual_weight > 0:
-            phase_desc += "+perceptual"
-        if adversarial_weight > 0:
-            phase_desc += "+adversarial"
+        avg_recon, avg_perceptual, avg_adv, global_step, phase_desc = train_one_epoch(
+            model, diffusion, discriminator, perceptual_loss_fn,
+            train_loader, model_optimizer, disc_optimizer,
+            epoch, cfg, device, global_step,
+        )
 
-        running_recon, running_perceptual, running_adv = 0.0, 0.0, 0.0
-
-        for step, (x0, class_ids) in enumerate(train_loader):
-            x0 = x0.to(device)
-            class_ids = class_ids.to(device)
-            B = x0.shape[0]
-
-            t = torch.randint(0, diffusion.timesteps, (B,), device=device)
-            noise = torch.randn_like(x0)
-            x_t = diffusion.q_sample(x0, t, noise)
-
-            predicted_noise = model(x_t, class_ids, t.float())
-
-            # ---- Reconstruction loss (always active) ----
-            recon_loss = nn.functional.mse_loss(predicted_noise, noise)
-            total_loss = recon_loss
-            perceptual_loss_value = torch.tensor(0.0, device=device)
-            adv_gen_loss_value = torch.tensor(0.0, device=device)
-
-            need_x0_hat = perceptual_weight > 0 or adversarial_weight > 0
-            if need_x0_hat:
-                x0_hat = diffusion.predict_x0_from_noise(x_t, t, predicted_noise)
-
-            # ---- Perceptual loss (phase 2+) ----
-            if perceptual_weight > 0:
-                perceptual_loss_value = perceptual_loss_fn(x0_hat, x0)
-                total_loss = total_loss + perceptual_weight * perceptual_loss_value
-
-            # ---- Adversarial loss (phase 3+) ----
-            if adversarial_weight > 0:
-                # 1) Discriminator update (uses a detached fake so gradients don't flow into the model)
-                disc_optimizer.zero_grad()
-                d_loss = discriminator_loss(discriminator, x0, x0_hat.detach())
-                d_loss.backward()
-                disc_optimizer.step()
-
-                # 2) Generator (model) adversarial term -- fresh forward through D, not detached
-                adv_gen_loss_value = generator_adversarial_loss(discriminator, x0_hat)
-                total_loss = total_loss + adversarial_weight * adv_gen_loss_value
-
-            model_optimizer.zero_grad()
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
-            model_optimizer.step()
-
-            running_recon += recon_loss.item()
-            running_perceptual += perceptual_loss_value.item()
-            running_adv += adv_gen_loss_value.item()
-
-            if global_step % cfg["TRAINING"]["LOG_EVERY_N_STEPS"] == 0:
-                print(
-                    f"[epoch {epoch}/{num_epochs} | step {step}/{len(train_loader)} | phase={phase_desc}] "
-                    f"recon={recon_loss.item():.4f} "
-                    f"perceptual={perceptual_loss_value.item():.4f} "
-                    f"adv={adv_gen_loss_value.item():.4f}"
-                )
-            global_step += 1
-
-        n_batches = len(train_loader)
         print(
             f"== Epoch {epoch} done | phase={phase_desc} | "
-            f"avg_recon={running_recon / n_batches:.4f} "
-            f"avg_perceptual={running_perceptual / n_batches:.4f} "
-            f"avg_adv={running_adv / n_batches:.4f} =="
+            f"avg_recon={avg_recon:.4f} "
+            f"avg_perceptual={avg_perceptual:.4f} "
+            f"avg_adv={avg_adv:.4f} =="
         )
 
         # ---- Per-epoch qualitative sample grid from fixed noise ----
@@ -267,6 +289,11 @@ def main():
             num_classes=model_cfg["NUM_CLASSES"], device=device,
         )
         print(f"== FINAL METRICS == FID={fid_value:.3f} | IS={is_mean:.3f} +/- {is_std:.3f}")
+
+
+def main():
+    cfg = load_config("configs.yml")
+    train(cfg)
 
 
 if __name__ == "__main__":

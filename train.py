@@ -290,6 +290,7 @@ def train(cfg):
 
 
 def main():
+    os.environ.setdefault("TQDM_DISABLE", "1")
     cfg = load_config("configs.yml")
     train(cfg)
 

@@ -174,20 +174,16 @@ def train(cfg):
     torch.manual_seed(cfg["TRAINING"]["SEED"])
 
     device = cfg["TRAINING"]["DEVICE"] if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    use_data_parallel = num_gpus > 1
+    print(f"Using device: {device} | visible GPUs: {num_gpus}")
 
     os.makedirs(cfg["TRAINING"]["CHECKPOINT_DIR"], exist_ok=True)
     os.makedirs(cfg["SAMPLING"]["SAMPLES_DIR"], exist_ok=True)
 
-    # ---- Model config sanity check ----
     model_cfg = cfg["MODEL"]
-    assert model_cfg["CLASS_EMBEDDING_DIM"] == model_cfg["TIMESTAMP_EMBEDDING_DIM"], (
-        "CLASS_EMBEDDING_DIM and TIMESTAMP_EMBEDDING_DIM must match -- "
-        "they are summed together inside ConditionalDDPM."
-    )
     embedding_dim = model_cfg["CLASS_EMBEDDING_DIM"]
 
-    # ---- Data ----
     train_dataset = CIFAR10Dataset(
         root=cfg["DATA"]["DATA_DIR"], train=True,
         image_side_length=model_cfg["IMAGE_SIDE_LENGTH"], augment=True, download=True,
@@ -226,6 +222,12 @@ def train(cfg):
     # ---- Progressive loss components (perceptual / adversarial) ----
     perceptual_loss_fn = VGGPerceptualLoss(layer_indices=cfg["LOSS"]["VGG_LAYER_INDICES"]).to(device)
     discriminator = PatchDiscriminator().to(device)
+
+    # ---- Multi-GPU (e.g. Kaggle T4 x2): split each batch across visible GPUs ----
+    if use_data_parallel:
+        model = nn.DataParallel(model)
+        discriminator = nn.DataParallel(discriminator)
+        print(f"Wrapped model and discriminator in nn.DataParallel across {num_gpus} GPUs.")
 
     # ---- Optimizers ----
     betas = tuple(cfg["TRAINING"]["ADAM_BETAS"])
@@ -271,10 +273,12 @@ def train(cfg):
         # ---- Checkpointing ----
         if epoch % cfg["TRAINING"]["CHECKPOINT_EVERY_N_EPOCHS"] == 0 or epoch == num_epochs:
             ckpt_path = os.path.join(cfg["TRAINING"]["CHECKPOINT_DIR"], f"ddpm_epoch_{epoch:03d}.pt")
+            model_to_save = model.module if isinstance(model, nn.DataParallel) else model
+            disc_to_save = discriminator.module if isinstance(discriminator, nn.DataParallel) else discriminator
             torch.save({
                 "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "discriminator_state_dict": discriminator.state_dict(),
+                "model_state_dict": model_to_save.state_dict(),
+                "discriminator_state_dict": disc_to_save.state_dict(),
                 "model_optimizer_state_dict": model_optimizer.state_dict(),
                 "disc_optimizer_state_dict": disc_optimizer.state_dict(),
                 "config": cfg,

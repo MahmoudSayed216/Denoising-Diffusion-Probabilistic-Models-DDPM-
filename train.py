@@ -22,7 +22,8 @@ import yaml
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision.utils import save_image
+from torchvision.utils import make_grid
+from PIL import Image, ImageDraw, ImageFont
 
 from cifar10_dataset import CIFAR10Dataset, denormalize
 from ConditionalDDPM import ConditionalDDPM
@@ -89,6 +90,58 @@ def sample_with_fixed_noise(diffusion, model, fixed_noise, fixed_class_ids, devi
 
     model.train()
     return x_t.clamp(-1.0, 1.0)
+
+
+CIFAR10_CLASS_NAMES = [
+    "airplane", "automobile", "bird", "cat", "deer",
+    "dog", "frog", "horse", "ship", "truck",
+]
+
+
+def save_labeled_sample_grid(images, class_ids, path, nrow, padding=2, upscale=4):
+    """
+    Saves an image grid (like torchvision.utils.save_image) but also stamps each
+    tile's class name in its top-left corner, so it's easy to visually confirm
+    samples match the class they were conditioned on.
+
+    Args:
+        images: (N, 3, H, W) tensor already denormalized to [0, 1].
+        class_ids: (N,) tensor or list of int class indices, same order as images.
+        path: output file path.
+        nrow: images per row (same meaning as torchvision.utils.make_grid).
+        padding: pixel padding between grid cells (matches make_grid's default of 2).
+        upscale: integer factor to enlarge the grid before drawing text. CIFAR-10
+            images are only 32x32, too small to fit legible text otherwise.
+    """
+    grid = make_grid(images, nrow=nrow, padding=padding)
+    grid_np = (grid.clamp(0.0, 1.0) * 255).byte().permute(1, 2, 0).cpu().numpy()
+    grid_img = Image.fromarray(grid_np)
+
+    if upscale > 1:
+        grid_img = grid_img.resize(
+            (grid_img.width * upscale, grid_img.height * upscale), resample=Image.NEAREST,
+        )
+
+    draw = ImageDraw.Draw(grid_img)
+    font = ImageFont.load_default()
+
+    img_h, img_w = images.shape[-2], images.shape[-1]
+    ncols = nrow
+    for idx in range(images.shape[0]):
+        row, col = divmod(idx, ncols)
+        cell_x = (padding + col * (img_w + padding)) * upscale
+        cell_y = (padding + row * (img_h + padding)) * upscale
+        class_id = int(class_ids[idx])
+        label = CIFAR10_CLASS_NAMES[class_id] if 0 <= class_id < len(CIFAR10_CLASS_NAMES) else str(class_id)
+
+        text_pos = (cell_x + 2, cell_y + 2)
+        text_bbox = draw.textbbox(text_pos, label, font=font)
+        box = (text_pos[0] - 1, text_pos[1] - 1, text_bbox[2] + 1, text_bbox[3] + 1)
+        # small filled box sized to the text so it stays legible over any tile color
+        draw.rectangle(box, fill=(0, 0, 0))
+        draw.text(text_pos, label, fill=(255, 255, 0), font=font)
+
+    grid_img.save(path)
 
 
 def train_one_epoch(
@@ -252,7 +305,9 @@ def train(cfg):
         if epoch % cfg["SAMPLING"]["SAMPLE_EVERY_N_EPOCHS"] == 0:
             samples = sample_with_fixed_noise(diffusion, model, fixed_noise, fixed_class_ids, device)
             grid_path = os.path.join(cfg["SAMPLING"]["SAMPLES_DIR"], f"epoch_{epoch:03d}.png")
-            save_image(denormalize(samples), grid_path, nrow=fixed_noise.shape[0])
+            save_labeled_sample_grid(
+                denormalize(samples), fixed_class_ids, grid_path, nrow=fixed_noise.shape[0],
+            )
             print(f"Saved fixed-noise sample grid -> {grid_path}")
 
         # ---- Periodic FID / IS estimate ----

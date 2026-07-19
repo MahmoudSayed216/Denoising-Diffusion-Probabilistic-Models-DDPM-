@@ -98,7 +98,7 @@ CIFAR10_CLASS_NAMES = [
 ]
 
 
-def save_labeled_sample_grid(images, class_ids, path, nrow, padding=2, upscale=4):
+def save_labeled_sample_grid(images, class_ids, path, nrow, padding=2, upscale=8):
     """
     Saves an image grid (like torchvision.utils.save_image) but also stamps each
     tile's class name in its top-left corner, so it's easy to visually confirm
@@ -111,7 +111,8 @@ def save_labeled_sample_grid(images, class_ids, path, nrow, padding=2, upscale=4
         nrow: images per row (same meaning as torchvision.utils.make_grid).
         padding: pixel padding between grid cells (matches make_grid's default of 2).
         upscale: integer factor to enlarge the grid before drawing text. CIFAR-10
-            images are only 32x32, too small to fit legible text otherwise.
+            images are only 32x32, too small to fit legible text otherwise -- default
+            of 8 brings each 32x32 tile up to 256x256.
     """
     grid = make_grid(images, nrow=nrow, padding=padding)
     grid_np = (grid.clamp(0.0, 1.0) * 255).byte().permute(1, 2, 0).cpu().numpy()

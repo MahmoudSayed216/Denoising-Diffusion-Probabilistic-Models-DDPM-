@@ -51,9 +51,13 @@ def get_loss_weights(epoch, loss_cfg):
 
 
 def build_fixed_noise_inputs(cfg, device):
-    """Fixed random noise + one class per label, seeded, for consistent per-epoch qualitative samples."""
+    """Fixed random noise + class ids cycling through 0..NUM_CLASSES-1, seeded, for
+    consistent per-epoch qualitative samples. NUM_FIXED_SAMPLES can be set higher
+    than NUM_CLASSES -- class ids simply wrap around (0,1,...,9,0,1,...,9,...) so
+    every class keeps getting represented no matter how high it's set.
+    """
     num_classes = cfg["MODEL"]["NUM_CLASSES"]
-    num_samples = min(cfg["SAMPLING"]["NUM_FIXED_SAMPLES"], num_classes)
+    num_samples = cfg["SAMPLING"]["NUM_FIXED_SAMPLES"]
     image_size = cfg["MODEL"]["IMAGE_SIDE_LENGTH"]
 
     generator = torch.Generator(device="cpu").manual_seed(cfg["TRAINING"]["SEED"])
@@ -307,7 +311,8 @@ def train(cfg):
             samples = sample_with_fixed_noise(diffusion, model, fixed_noise, fixed_class_ids, device)
             grid_path = os.path.join(cfg["SAMPLING"]["SAMPLES_DIR"], f"epoch_{epoch:03d}.png")
             save_labeled_sample_grid(
-                denormalize(samples), fixed_class_ids, grid_path, nrow=fixed_noise.shape[0],
+                denormalize(samples), fixed_class_ids, grid_path,
+                nrow=min(model_cfg["NUM_CLASSES"], fixed_noise.shape[0]),
             )
             print(f"Saved fixed-noise sample grid -> {grid_path}")
 

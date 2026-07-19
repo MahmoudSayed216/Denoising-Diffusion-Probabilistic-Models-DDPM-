@@ -16,7 +16,7 @@ MODEL:
   NUM_CLASSES: 10
   THETA: 10000
   IMAGE_SIDE_LENGTH: 32
-  CHANNELS_PER_LEVEL: [128, 256, 384, 512]   # [c1, c2, c3, c4] channel widths per resolution
+  CHANNELS_PER_LEVEL: [128, 256, 256, 512]   # [c1, c2, c3, c4] channel widths per resolution
   NUM_GROUPS: 32
 
 ## ============================================================
@@ -30,7 +30,7 @@ DATA:
   DATA_DIR: "/kaggle/input/datasets/pankrzysiu/cifar10-python"
   DOWNLOAD: false               # Kaggle input mounts are read-only and already contain the data
   NUM_WORKERS: 4
-  BATCH_SIZE: 64
+  BATCH_SIZE: 48
 
 ## ============================================================
 ## TRAINING

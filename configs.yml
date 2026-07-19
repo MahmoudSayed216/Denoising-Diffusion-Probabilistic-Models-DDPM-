@@ -30,7 +30,7 @@ DATA:
   DATA_DIR: "/kaggle/input/datasets/pankrzysiu/cifar10-python"
   DOWNLOAD: false               # Kaggle input mounts are read-only and already contain the data
   NUM_WORKERS: 4
-  BATCH_SIZE: 112
+  BATCH_SIZE: 96
 
 ## ============================================================
 ## TRAINING

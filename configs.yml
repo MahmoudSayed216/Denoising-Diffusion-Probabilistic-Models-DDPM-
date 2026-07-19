@@ -27,7 +27,7 @@ DATA:
   # CIFAR10Dataset auto-detects whichever attached dataset directly contains
   # a 'cifar-10-batches-py' folder (e.g. /kaggle/input/cifar10-python/cifar-10-batches-py).
   # Running locally instead? Point this at your own data dir and set DOWNLOAD: true.
-  DATA_DIR: "/kaggle/input"
+  DATA_DIR: "/kaggle/input/datasets/pankrzysiu/cifar10-python"
   DOWNLOAD: false               # Kaggle input mounts are read-only and already contain the data
   NUM_WORKERS: 4
   BATCH_SIZE: 128

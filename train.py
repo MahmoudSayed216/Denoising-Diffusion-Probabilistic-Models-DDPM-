@@ -12,6 +12,12 @@ At the end of training: computes a final, larger-sample-count FID/IS.
 """
 
 import os
+
+# Silence tqdm progress bars globally (e.g. the VGG16 pretrained-weights
+# download inside VGGPerceptualLoss) -- must be set before torch/torchvision
+# are imported.
+os.environ.setdefault("TQDM_DISABLE", "1")
+
 import yaml
 import torch
 import torch.nn as nn
@@ -169,9 +175,7 @@ def train(cfg):
     torch.manual_seed(cfg["TRAINING"]["SEED"])
 
     device = cfg["TRAINING"]["DEVICE"] if torch.cuda.is_available() else "cpu"
-    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    use_data_parallel = num_gpus > 1
-    print(f"Using device: {device} | visible GPUs: {num_gpus}")
+    print(f"Using device: {device}")
 
     os.makedirs(cfg["TRAINING"]["CHECKPOINT_DIR"], exist_ok=True)
     os.makedirs(cfg["SAMPLING"]["SAMPLES_DIR"], exist_ok=True)
@@ -218,12 +222,6 @@ def train(cfg):
     perceptual_loss_fn = VGGPerceptualLoss(layer_indices=cfg["LOSS"]["VGG_LAYER_INDICES"]).to(device)
     discriminator = PatchDiscriminator().to(device)
 
-    # ---- Multi-GPU (e.g. Kaggle T4 x2): split each batch across visible GPUs ----
-    if use_data_parallel:
-        model = nn.DataParallel(model)
-        discriminator = nn.DataParallel(discriminator)
-        print(f"Wrapped model and discriminator in nn.DataParallel across {num_gpus} GPUs.")
-
     # ---- Optimizers ----
     betas = tuple(cfg["TRAINING"]["ADAM_BETAS"])
     model_optimizer = torch.optim.Adam(model.parameters(), lr=cfg["TRAINING"]["LR"], betas=betas)
@@ -267,12 +265,10 @@ def train(cfg):
         # ---- Checkpointing ----
         if epoch % cfg["TRAINING"]["CHECKPOINT_EVERY_N_EPOCHS"] == 0 or epoch == num_epochs:
             ckpt_path = os.path.join(cfg["TRAINING"]["CHECKPOINT_DIR"], f"ddpm_epoch_{epoch:03d}.pt")
-            model_to_save = model.module if isinstance(model, nn.DataParallel) else model
-            disc_to_save = discriminator.module if isinstance(discriminator, nn.DataParallel) else discriminator
             torch.save({
                 "epoch": epoch,
-                "model_state_dict": model_to_save.state_dict(),
-                "discriminator_state_dict": disc_to_save.state_dict(),
+                "model_state_dict": model.state_dict(),
+                "discriminator_state_dict": discriminator.state_dict(),
                 "model_optimizer_state_dict": model_optimizer.state_dict(),
                 "disc_optimizer_state_dict": disc_optimizer.state_dict(),
                 "config": cfg,
@@ -290,7 +286,6 @@ def train(cfg):
 
 
 def main():
-    os.environ.setdefault("TQDM_DISABLE", "1")
     cfg = load_config("configs.yml")
     train(cfg)
 

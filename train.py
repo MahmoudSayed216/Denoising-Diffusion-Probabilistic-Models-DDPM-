@@ -185,7 +185,8 @@ def train(cfg):
 
     train_dataset = CIFAR10Dataset(
         root=cfg["DATA"]["DATA_DIR"], train=True,
-        image_side_length=model_cfg["IMAGE_SIDE_LENGTH"], augment=True, download=True,
+        image_side_length=model_cfg["IMAGE_SIDE_LENGTH"], augment=True,
+        download=cfg["DATA"].get("DOWNLOAD", True),
     )
     train_loader = DataLoader(
         train_dataset, batch_size=cfg["DATA"]["BATCH_SIZE"], shuffle=True,
@@ -194,7 +195,8 @@ def train(cfg):
 
     real_eval_dataset = CIFAR10Dataset(
         root=cfg["DATA"]["DATA_DIR"], train=False,
-        image_side_length=model_cfg["IMAGE_SIDE_LENGTH"], augment=False, download=True,
+        image_side_length=model_cfg["IMAGE_SIDE_LENGTH"], augment=False,
+        download=cfg["DATA"].get("DOWNLOAD", True),
     )
     real_eval_loader = DataLoader(
         real_eval_dataset, batch_size=cfg["DATA"]["BATCH_SIZE"], shuffle=True,

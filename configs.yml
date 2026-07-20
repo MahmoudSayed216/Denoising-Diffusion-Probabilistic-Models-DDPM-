@@ -55,8 +55,8 @@ TRAINING:
 ## Phase 3 [PHASE2_END_EPOCH+1 .. EPOCHS]               -> + adversarial
 ## ============================================================
 LOSS:
-  PHASE1_END_EPOCH: 60
-  PHASE2_END_EPOCH: 70
+  PHASE1_END_EPOCH: 71
+  PHASE2_END_EPOCH: 71
   PERCEPTUAL_WEIGHT: 0.1
   ADVERSARIAL_WEIGHT: 0.05
   VGG_LAYER_INDICES: [3, 8, 15, 22]   # relu1_2, relu2_2, relu3_3, relu4_3 in torchvision vgg16.features

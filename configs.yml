@@ -38,7 +38,6 @@ DATA:
 TRAINING:
   EPOCHS: 70
   LR: 0.0002
-  DISCRIMINATOR_LR: 0.0002
   OPTIMIZER: "adam"
   ADAM_BETAS: [0.5, 0.999]
   GRAD_CLIP_NORM: 1.0
@@ -49,24 +48,11 @@ TRAINING:
   CHECKPOINT_EVERY_N_EPOCHS: 10
 
 ## ============================================================
-## PROGRESSIVE LOSS SCHEDULE
-## Phase 1 [epoch 1 .. PHASE1_END_EPOCH]                -> reconstruction only
-## Phase 2 [PHASE1_END_EPOCH+1 .. PHASE2_END_EPOCH]     -> + perceptual
-## Phase 3 [PHASE2_END_EPOCH+1 .. EPOCHS]               -> + adversarial
-## ============================================================
-LOSS:
-  PHASE1_END_EPOCH: 71
-  PHASE2_END_EPOCH: 71
-  PERCEPTUAL_WEIGHT: 0.1
-  ADVERSARIAL_WEIGHT: 0.05
-  VGG_LAYER_INDICES: [3, 8, 15, 22]   # relu1_2, relu2_2, relu3_3, relu4_3 in torchvision vgg16.features
-
-## ============================================================
 ## FIXED-NOISE QUALITATIVE SAMPLING (every epoch)
 ## ============================================================
 SAMPLING:
   SAMPLE_EVERY_N_EPOCHS: 1
-  NUM_FIXED_SAMPLES: 30          # one sample per class, 0..9
+  NUM_FIXED_SAMPLES: 30          # cycles through classes 0..9 -- 30 = 3 samples per class
   SAMPLES_DIR: "./samples"
 
 ## ============================================================

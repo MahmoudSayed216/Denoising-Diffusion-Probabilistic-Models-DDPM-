@@ -1,10 +1,7 @@
 """
 Main training script for the conditional DDPM on CIFAR-10.
 
-Progressive loss schedule (see configs.yml -> LOSS):
-    Phase 1 (epochs 1..PHASE1_END_EPOCH):                reconstruction only
-    Phase 2 (epochs PHASE1_END_EPOCH+1..PHASE2_END_EPOCH): + perceptual (VGG16)
-    Phase 3 (epochs PHASE2_END_EPOCH+1..EPOCHS):           + adversarial (PatchGAN)
+Training uses reconstruction (noise-prediction) loss only.
 
 Every epoch: generates a fixed-noise sample grid to visually track progress.
 Every EVAL.FID_EVERY_N_EPOCHS epochs: computes an FID/IS estimate on a modest sample count.
@@ -13,9 +10,8 @@ At the end of training: computes a final, larger-sample-count FID/IS.
 
 import os
 
-# Silence tqdm progress bars globally (e.g. the VGG16 pretrained-weights
-# download inside VGGPerceptualLoss) -- must be set before torch/torchvision
-# are imported.
+# Silence tqdm progress bars globally (e.g. any pretrained-weights download) --
+# must be set before torch/torchvision are imported.
 os.environ.setdefault("TQDM_DISABLE", "1")
 
 import yaml
@@ -28,26 +24,12 @@ from PIL import Image, ImageDraw, ImageFont
 from cifar10_dataset import CIFAR10Dataset, denormalize
 from ConditionalDDPM import ConditionalDDPM
 from diffusion_utils import GaussianDiffusion
-from losses import VGGPerceptualLoss, PatchDiscriminator, discriminator_loss, generator_adversarial_loss
 from metrics import compute_fid_and_is
 
 
 def load_config(path="configs.yml"):
     with open(path, "r") as f:
         return yaml.safe_load(f)
-
-
-def get_loss_weights(epoch, loss_cfg):
-    """Returns (perceptual_weight, adversarial_weight) active at this epoch (1-indexed)."""
-    perceptual_weight = 0.0
-    adversarial_weight = 0.0
-
-    if epoch > loss_cfg["PHASE1_END_EPOCH"]:
-        perceptual_weight = loss_cfg["PERCEPTUAL_WEIGHT"]
-    if epoch > loss_cfg["PHASE2_END_EPOCH"]:
-        adversarial_weight = loss_cfg["ADVERSARIAL_WEIGHT"]
-
-    return perceptual_weight, adversarial_weight
 
 
 def build_fixed_noise_inputs(cfg, device):
@@ -149,30 +131,17 @@ def save_labeled_sample_grid(images, class_ids, path, nrow, padding=2, upscale=8
     grid_img.save(path)
 
 
-def train_one_epoch(
-    model, diffusion, discriminator, perceptual_loss_fn,
-    train_loader, model_optimizer, disc_optimizer,
-    epoch, cfg, device,
-):
-    """Runs the per-batch training loop for a single epoch.
+def train_one_epoch(model, diffusion, train_loader, model_optimizer, cfg, device):
+    """Runs the per-batch training loop for a single epoch (reconstruction loss only).
 
-    No per-batch logging -- only returns the averaged losses so the caller
-    can print a single summary line once the epoch finishes.
+    No per-batch logging -- only returns the averaged loss so the caller can
+    print a single summary line once the epoch finishes.
 
-    Returns (avg_recon, avg_perceptual, avg_adv, phase_desc).
+    Returns avg_recon.
     """
-    perceptual_weight, adversarial_weight = get_loss_weights(epoch, cfg["LOSS"])
-    phase_desc = "recon"
-    if perceptual_weight > 0:
-        phase_desc += "+perceptual"
-    if adversarial_weight > 0:
-        phase_desc += "+adversarial"
-
     grad_clip_norm = cfg["TRAINING"]["GRAD_CLIP_NORM"]
 
     running_recon = 0.0
-    running_perceptual = 0.0
-    running_adv = 0.0
 
     for x0, class_ids in train_loader:
         x0 = x0.to(device)
@@ -185,48 +154,19 @@ def train_one_epoch(
 
         predicted_noise = model(x_t, class_ids, t.float())
 
-        # ---- Reconstruction loss (always active) ----
         recon_loss = nn.functional.mse_loss(predicted_noise, noise)
-        total_loss = recon_loss
-        perceptual_loss_value = torch.tensor(0.0, device=device)
-        adv_gen_loss_value = torch.tensor(0.0, device=device)
-
-        need_x0_hat = perceptual_weight > 0 or adversarial_weight > 0
-        if need_x0_hat:
-            x0_hat = diffusion.predict_x0_from_noise(x_t, t, predicted_noise)
-
-        # ---- Perceptual loss (phase 2+) ----
-        if perceptual_weight > 0:
-            perceptual_loss_value = perceptual_loss_fn(x0_hat, x0)
-            total_loss = total_loss + perceptual_weight * perceptual_loss_value
-
-        # ---- Adversarial loss (phase 3+) ----
-        if adversarial_weight > 0:
-            # 1) Discriminator update (uses a detached fake so gradients don't flow into the model)
-            disc_optimizer.zero_grad()
-            d_loss = discriminator_loss(discriminator, x0, x0_hat.detach())
-            d_loss.backward()
-            disc_optimizer.step()
-
-            # 2) Generator (model) adversarial term -- fresh forward through D, not detached
-            adv_gen_loss_value = generator_adversarial_loss(discriminator, x0_hat)
-            total_loss = total_loss + adversarial_weight * adv_gen_loss_value
 
         model_optimizer.zero_grad()
-        total_loss.backward()
+        recon_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
         model_optimizer.step()
 
         running_recon += recon_loss.item()
-        running_perceptual += perceptual_loss_value.item()
-        running_adv += adv_gen_loss_value.item()
 
     n_batches = len(train_loader)
     avg_recon = running_recon / n_batches
-    avg_perceptual = running_perceptual / n_batches
-    avg_adv = running_adv / n_batches
 
-    return avg_recon, avg_perceptual, avg_adv, phase_desc
+    return avg_recon
 
 
 def train(cfg):
@@ -278,14 +218,9 @@ def train(cfg):
         device=device,
     )
 
-    # ---- Progressive loss components (perceptual / adversarial) ----
-    perceptual_loss_fn = VGGPerceptualLoss(layer_indices=cfg["LOSS"]["VGG_LAYER_INDICES"]).to(device)
-    discriminator = PatchDiscriminator().to(device)
-
-    # ---- Optimizers ----
+    # ---- Optimizer ----
     betas = tuple(cfg["TRAINING"]["ADAM_BETAS"])
     model_optimizer = torch.optim.Adam(model.parameters(), lr=cfg["TRAINING"]["LR"], betas=betas)
-    disc_optimizer = torch.optim.Adam(discriminator.parameters(), lr=cfg["TRAINING"]["DISCRIMINATOR_LR"], betas=betas)
 
     # ---- Fixed noise for per-epoch qualitative sampling ----
     fixed_noise, fixed_class_ids = build_fixed_noise_inputs(cfg, device)
@@ -293,18 +228,9 @@ def train(cfg):
     num_epochs = cfg["TRAINING"]["EPOCHS"]
 
     for epoch in range(1, num_epochs + 1):
-        avg_recon, avg_perceptual, avg_adv, phase_desc = train_one_epoch(
-            model, diffusion, discriminator, perceptual_loss_fn,
-            train_loader, model_optimizer, disc_optimizer,
-            epoch, cfg, device,
-        )
+        avg_recon = train_one_epoch(model, diffusion, train_loader, model_optimizer, cfg, device)
 
-        print(
-            f"== Epoch {epoch}/{num_epochs} done | phase={phase_desc} | "
-            f"avg_recon={avg_recon:.4f} "
-            f"avg_perceptual={avg_perceptual:.4f} "
-            f"avg_adv={avg_adv:.4f} =="
-        )
+        print(f"== Epoch {epoch}/{num_epochs} done | avg_recon={avg_recon:.4f} ==")
 
         # ---- Per-epoch qualitative sample grid from fixed noise ----
         if epoch % cfg["SAMPLING"]["SAMPLE_EVERY_N_EPOCHS"] == 0:
@@ -331,9 +257,7 @@ def train(cfg):
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
-                "discriminator_state_dict": discriminator.state_dict(),
                 "model_optimizer_state_dict": model_optimizer.state_dict(),
-                "disc_optimizer_state_dict": disc_optimizer.state_dict(),
                 "config": cfg,
             }, ckpt_path)
             print(f"Saved checkpoint -> {ckpt_path}")
